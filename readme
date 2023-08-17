@@ -1,0 +1,9 @@
+since debian stable's version of column(1) doesn't handle successive delimiters
+
+$ go install go.senan.xyz/table@master
+
+$ printf '%s\t%s\t%s\n' '' b c aaaa b c a bbbbbb c '' '' c | table
+     b      c
+aaaa b      c
+a    bbbbbb c
+            c
