@@ -29,6 +29,8 @@ type Table struct {
 	table  [][]string
 	errs   []error
 	line   int
+
+	Separator string
 }
 
 func New(out io.Writer, in io.Reader) *Table {
@@ -65,11 +67,16 @@ func (t *Table) parseLine(line string) {
 }
 
 func (t *Table) Flush() error {
+	var sep string = " "
+	if t.Separator != "" {
+		sep = " " + t.Separator + " "
+	}
+
 	for _, row := range t.table {
 		var rbuf []byte
 		for i, col := range row {
 			if i != 0 {
-				rbuf = fmt.Append(rbuf, " ")
+				rbuf = fmt.Append(rbuf, sep)
 			}
 			rbuf = fmt.Appendf(rbuf, "%-*s", t.widths[i], col)
 		}
