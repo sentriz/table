@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/rivo/uniseg"
 )
 
 type Table struct {
@@ -53,7 +55,7 @@ func (t *Table) parseLine(line string) {
 	}
 	if t.widths == nil {
 		for _, p := range cols {
-			t.widths = append(t.widths, len(p))
+			t.widths = append(t.widths, width(p))
 		}
 	}
 	if len(cols) != len(t.widths) {
@@ -61,7 +63,7 @@ func (t *Table) parseLine(line string) {
 		return
 	}
 	for i := range t.widths {
-		t.widths[i] = max(t.widths[i], len(cols[i]))
+		t.widths[i] = max(t.widths[i], width(cols[i]))
 	}
 	t.table = append(t.table, cols)
 }
@@ -76,9 +78,10 @@ func (t *Table) Flush() error {
 		var rbuf []byte
 		for i, col := range row {
 			if i != 0 {
-				rbuf = fmt.Append(rbuf, sep)
+				rbuf = append(rbuf, []byte(sep)...)
 			}
-			rbuf = fmt.Appendf(rbuf, "%-*s", t.widths[i], col)
+			rbuf = append(rbuf, []byte(col)...)
+			rbuf = append(rbuf, strings.Repeat(" ", t.widths[i]-width(col))...)
 		}
 		fmt.Fprintln(t.out, string(rbuf))
 	}
@@ -97,4 +100,8 @@ type RowError struct {
 
 func (re *RowError) Error() string {
 	return fmt.Sprintf("line %d: want %d cols got %d", re.Line, re.Want, re.Got)
+}
+
+func width(s string) int {
+	return uniseg.StringWidth(s)
 }
