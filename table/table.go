@@ -68,7 +68,7 @@ func (t *Table) parseLine(line string) {
 	t.table = append(t.table, cols)
 }
 
-func (t *Table) Flush() error {
+func (t *Table) Flush() {
 	var sep string = " "
 	if t.Separator != "" {
 		sep = " " + t.Separator + " "
@@ -87,6 +87,9 @@ func (t *Table) Flush() error {
 	}
 
 	t.table = nil
+}
+
+func (t *Table) Reset() error {
 	t.widths = nil
 
 	err := errors.Join(t.errs...)

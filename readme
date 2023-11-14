@@ -7,3 +7,18 @@ $ printf '%s\t%s\t%s\n' '' b c aaaa b c a bbbbbb c '' '' c | table
 aaaa b      c
 a    bbbbbb c
             c
+
+$ printf '%s\t%s\t%s\n' '' b c aaaa b c a bbbbbb c '' '' c | table '|'
+     | b      | c
+aaaa | b      | c
+a    | bbbbbb | c
+     |        | c
+
+# works for streams with a flush interval
+$ tail -f logs | pick-cols | table : 3
+2023 : event one   : event param           : 53f1a74226358c8c7
+2023 : event two   : event name is longer  : 53f1a74226358c8c7
+2023 : event three : event                 : 53f1a74226358c8c7
+2023 : event longer one   : event longer param           : 53f1a74226358c8c7
+2023 : event longer two   : event longer name is longer  : 53f1a74226358c8c7
+2023 : event longer three : event longer                 : 53f1a74226358c8c7

@@ -3,23 +3,54 @@ package main
 import (
 	"fmt"
 	"os"
+	"strconv"
 
 	"go.senan.xyz/table/table"
 )
 
+// $ stream | table [ sep ]
+// $ stream | table [ sep [ flush interval ] ]
+
 func main() {
 	var separator string
-	if len(os.Args) > 1 {
-		separator = os.Args[1]
+	var flushInterval int
+
+	args := os.Args[1:]
+	if len(args) > 0 {
+		separator = args[0]
+		args = args[1:]
+	}
+	if len(args) > 0 {
+		if i, _ := strconv.Atoi(args[0]); i > 0 {
+			flushInterval = i
+		}
 	}
 
 	t := table.New(os.Stdout, os.Stdin)
 	t.Separator = separator
 
-	for t.Scan() {
+	defer func() {
+		if err := t.Reset(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	}()
+
+	if flushInterval == 0 {
+		for t.Scan() {
+		}
+		t.Flush()
+		return
 	}
-	if err := t.Flush(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+
+L:
+	for {
+		for i := 0; i < flushInterval; i++ {
+			if !t.Scan() {
+				break L
+			}
+		}
+		t.Flush()
 	}
+	t.Flush()
 }

@@ -18,14 +18,16 @@ func TestTable(t *testing.T) {
 	fmt.Fprintf(&in, "%s\t%s\t%s\n", "aaaa", "b", "c")
 	tbl.Scan()
 	tbl.Scan()
-	tNoErr(t, tbl.Flush())
+	tbl.Flush()
+	tNoErr(t, tbl.Reset())
 	tEq(t, tRead(t, &out), "     b c!\naaaa b c \n")
 
 	fmt.Fprintf(&in, "%s\t%s\t%s\n", "a", "bbbbbbbbbbb", "c")
 	fmt.Fprintf(&in, "%s\t%s\t%s\n", "", "", "c")
 	tbl.Scan()
 	tbl.Scan()
-	tNoErr(t, tbl.Flush())
+	tbl.Flush()
+	tNoErr(t, tbl.Reset())
 	tEq(t, tRead(t, &out), "a bbbbbbbbbbb c\n              c\n")
 }
 
@@ -40,7 +42,8 @@ func TestTableError(t *testing.T) {
 	}
 
 	var re *table.RowError
-	if !errors.As(tbl.Flush(), &re) {
+	tbl.Flush()
+	if !errors.As(tbl.Reset(), &re) {
 		t.Fatal("didn't get row error")
 	}
 	tEq(t, re.Line, 2)
