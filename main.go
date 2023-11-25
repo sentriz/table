@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"strconv"
@@ -26,7 +27,10 @@ func main() {
 		}
 	}
 
-	t := table.New(os.Stdout, os.Stdin)
+	out := bufio.NewWriter(os.Stdout)
+	defer out.Flush()
+
+	t := table.New(out, os.Stdin)
 	t.Separator = separator
 
 	defer func() {
@@ -51,6 +55,7 @@ L:
 			}
 		}
 		t.Flush()
+		out.Flush()
 	}
 	t.Flush()
 }
