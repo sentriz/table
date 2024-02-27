@@ -16,6 +16,7 @@ package table
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -25,32 +26,51 @@ import (
 	"github.com/rivo/uniseg"
 )
 
-type TableWriter struct {
-	*Table
-	pw *io.PipeWriter
+type StringWriter struct {
+	*Writer
+	buff *bytes.Buffer
 }
 
-func (tw *TableWriter) Write(p []byte) (int, error) {
+func NewStringWriter() *StringWriter {
+	var buff bytes.Buffer
+	return &StringWriter{Writer: NewWriter(&buff), buff: &buff}
+}
+
+func (s *StringWriter) String() string {
+	s.Close()
+	return s.buff.String()
+}
+
+type Writer struct {
+	*Reader
+	pw   *io.PipeWriter
+	done chan struct{}
+}
+
+func NewWriter(out io.Writer) *Writer {
+	done := make(chan struct{})
+	pr, pw := io.Pipe()
+	r := NewReader(out, pr)
+	go func() {
+		for r.Scan() {
+		}
+		r.Flush()
+		close(done)
+	}()
+	return &Writer{r, pw, done}
+}
+
+func (tw *Writer) Write(p []byte) (int, error) {
 	return tw.pw.Write(p)
 }
 
-func (tw *TableWriter) Close() error {
-	tw.Flush()
-	return tw.pw.Close()
+func (tw *Writer) Close() error {
+	err := tw.pw.Close()
+	<-tw.done
+	return err
 }
 
-func NewWriter(out io.Writer) *TableWriter {
-	pr, pw := io.Pipe()
-	table := New(out, pr)
-	go func() {
-		for table.Scan() {
-		}
-		pr.Close()
-	}()
-	return &TableWriter{table, pw}
-}
-
-type Table struct {
+type Reader struct {
 	out    io.Writer
 	sc     *bufio.Scanner
 	widths []int
@@ -61,65 +81,65 @@ type Table struct {
 	Separator string
 }
 
-func New(out io.Writer, in io.Reader) *Table {
-	return &Table{out: out, sc: bufio.NewScanner(in)}
+func NewReader(out io.Writer, in io.Reader) *Reader {
+	return &Reader{out: out, sc: bufio.NewScanner(in)}
 }
 
-func (t *Table) Scan() bool {
-	if t.sc.Scan() {
-		t.line++
-		t.parseLine(t.sc.Text())
+func (r *Reader) Scan() bool {
+	if r.sc.Scan() {
+		r.line++
+		r.parseLine(r.sc.Text())
 		return true
 	}
 	return false
 }
 
-func (t *Table) parseLine(line string) {
+func (r *Reader) parseLine(line string) {
 	cols := strings.Split(line, "\t")
 	for i := range cols {
 		cols[i] = strings.TrimSpace(cols[i])
 	}
-	if t.widths == nil {
+	if r.widths == nil {
 		for _, p := range cols {
-			t.widths = append(t.widths, width(p))
+			r.widths = append(r.widths, strWidth(p))
 		}
 	}
-	if len(cols) != len(t.widths) {
-		t.errs = append(t.errs, &RowError{Line: t.line, Want: len(t.widths), Got: len(cols)})
+	if len(cols) != len(r.widths) {
+		r.errs = append(r.errs, &RowError{Line: r.line, Want: len(r.widths), Got: len(cols)})
 		return
 	}
-	for i := range t.widths {
-		t.widths[i] = max(t.widths[i], width(cols[i]))
+	for i := range r.widths {
+		r.widths[i] = max(r.widths[i], strWidth(cols[i]))
 	}
-	t.table = append(t.table, cols)
+	r.table = append(r.table, cols)
 }
 
-func (t *Table) Flush() {
+func (r *Reader) Flush() {
 	var sep string = " "
-	if t.Separator != "" {
-		sep = " " + t.Separator + " "
+	if r.Separator != "" {
+		sep = " " + r.Separator + " "
 	}
 
-	for _, row := range t.table {
+	for _, row := range r.table {
 		var rbuf []byte
 		for i, col := range row {
 			if i != 0 {
 				rbuf = append(rbuf, []byte(sep)...)
 			}
 			rbuf = append(rbuf, []byte(col)...)
-			rbuf = append(rbuf, strings.Repeat(" ", t.widths[i]-width(col))...)
+			rbuf = append(rbuf, strings.Repeat(" ", r.widths[i]-strWidth(col))...)
 		}
-		fmt.Fprintln(t.out, string(rbuf))
+		fmt.Fprintln(r.out, string(rbuf))
 	}
 
-	t.table = nil
+	r.table = nil
 }
 
-func (t *Table) Reset() error {
-	t.widths = nil
+func (r *Reader) Reset() error {
+	r.widths = nil
 
-	err := errors.Join(t.errs...)
-	t.errs = nil
+	err := errors.Join(r.errs...)
+	r.errs = nil
 	return err
 }
 
@@ -133,7 +153,7 @@ func (re *RowError) Error() string {
 
 var ansiEscExpr = regexp.MustCompile("[\u001B\u009B][[\\]()#;?]*(?:(?:(?:[a-zA-Z\\d]*(?:;[a-zA-Z\\d]*)*)?\u0007)|(?:(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-PRZcf-ntqry=><~]))")
 
-func width(s string) int {
+func strWidth(s string) int {
 	s = ansiEscExpr.ReplaceAllString(s, "")
 	w := uniseg.StringWidth(s)
 	return w

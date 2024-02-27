@@ -30,7 +30,7 @@ func main() {
 	out := bufio.NewWriter(os.Stdout)
 	defer out.Flush()
 
-	t := table.New(out, os.Stdin)
+	t := table.NewReader(out, os.Stdin)
 	t.Separator = separator
 
 	defer func() {

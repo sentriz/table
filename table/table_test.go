@@ -12,7 +12,7 @@ import (
 
 func TestTable(t *testing.T) {
 	var in, out bytes.Buffer
-	tbl := table.New(&out, &in)
+	tbl := table.NewReader(&out, &in)
 
 	fmt.Fprintf(&in, "%s\t%s\t%s\n", "", "b", "c!")
 	fmt.Fprintf(&in, "%s\t%s\t%s\n", "aaaa", "b", "c")
@@ -33,7 +33,7 @@ func TestTable(t *testing.T) {
 
 func TestTableError(t *testing.T) {
 	var in, out bytes.Buffer
-	tbl := table.New(&out, &in)
+	tbl := table.NewReader(&out, &in)
 
 	fmt.Fprintf(&in, "%s\t%s\t%s\n", "", "b", "c!")
 	fmt.Fprintf(&in, "%s\t%s\n", "1", "2")
