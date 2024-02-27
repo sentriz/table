@@ -19,10 +19,36 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 
 	"github.com/rivo/uniseg"
 )
+
+type TableWriter struct {
+	*Table
+	pw *io.PipeWriter
+}
+
+func (tw *TableWriter) Write(p []byte) (int, error) {
+	return tw.pw.Write(p)
+}
+
+func (tw *TableWriter) Close() error {
+	tw.Flush()
+	return tw.pw.Close()
+}
+
+func NewWriter(out io.Writer) *TableWriter {
+	pr, pw := io.Pipe()
+	table := New(out, pr)
+	go func() {
+		for table.Scan() {
+		}
+		pr.Close()
+	}()
+	return &TableWriter{table, pw}
+}
 
 type Table struct {
 	out    io.Writer
@@ -105,6 +131,10 @@ func (re *RowError) Error() string {
 	return fmt.Sprintf("line %d: want %d cols got %d", re.Line, re.Want, re.Got)
 }
 
+var ansiEscExpr = regexp.MustCompile("[\u001B\u009B][[\\]()#;?]*(?:(?:(?:[a-zA-Z\\d]*(?:;[a-zA-Z\\d]*)*)?\u0007)|(?:(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-PRZcf-ntqry=><~]))")
+
 func width(s string) int {
-	return uniseg.StringWidth(s)
+	s = ansiEscExpr.ReplaceAllString(s, "")
+	w := uniseg.StringWidth(s)
+	return w
 }
