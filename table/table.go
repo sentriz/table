@@ -1,23 +1,8 @@
-// Package table defines a type for reading tab separated lines from the input. When Flush is called the
-// lines are reformatted according to the longest column seen in the lines so far.
-//
-// It's also suitable for use in a long running stream by Flushing at set intervals.
-//
-//	t := NewTable(out, in)
-//	t.Scan()
-//	t.Scan()
-//	t.Flush()
-//	t.Scan()
-//	t.Scan()
-//	t.Flush()
-//
-// Each Flush will be formatted to the widest columns in the previous set of lines.
+// Package table provides a Writer for formatting tab-separated data into aligned columns.
 package table
 
 import (
-	"bufio"
 	"bytes"
-	"errors"
 	"fmt"
 	"io"
 	"regexp"
@@ -26,121 +11,148 @@ import (
 	"github.com/rivo/uniseg"
 )
 
-type StringWriter struct {
-	*Writer
-	buff *bytes.Buffer
+type Buffer struct {
+	formatter  formatter
+	buffer     []byte
+	readBuffer []byte
+	readPos    int
 }
 
-func NewStringWriter() *StringWriter {
-	var buff bytes.Buffer
-	return &StringWriter{Writer: NewWriter(&buff), buff: &buff}
+func (b *Buffer) SetSeparator(sep string) {
+	b.formatter.setSeperator(sep)
 }
 
-func (s *StringWriter) String() string {
-	s.Close()
-	return s.buff.String()
-}
+func (b *Buffer) Write(p []byte) (int, error) {
+	b.readBuffer = nil
+	b.readPos = 0
 
-type Writer struct {
-	*Reader
-	pw   *io.PipeWriter
-	done chan struct{}
-}
-
-func NewWriter(out io.Writer) *Writer {
-	done := make(chan struct{})
-	pr, pw := io.Pipe()
-	r := NewReader(out, pr)
-	go func() {
-		for r.Scan() {
-		}
-		r.Flush()
-		close(done)
-	}()
-	return &Writer{r, pw, done}
-}
-
-func (tw *Writer) Write(p []byte) (int, error) {
-	return tw.pw.Write(p)
-}
-
-func (tw *Writer) Close() error {
-	err := tw.pw.Close()
-	<-tw.done
-	return err
-}
-
-type Reader struct {
-	out    io.Writer
-	sc     *bufio.Scanner
-	widths []int
-	table  [][]string
-	errs   []error
-	line   int
-
-	Separator string
-}
-
-func NewReader(out io.Writer, in io.Reader) *Reader {
-	return &Reader{out: out, sc: bufio.NewScanner(in)}
-}
-
-func (r *Reader) Scan() bool {
-	if r.sc.Scan() {
-		r.line++
-		r.parseLine(r.sc.Text())
-		return true
+	if b.buffer == nil {
+		b.buffer = make([]byte, 0, 1024)
 	}
-	return false
+
+	b.buffer = append(b.buffer, p...)
+	for {
+		if i := bytes.IndexByte(b.buffer, '\n'); i >= 0 {
+			line := string(b.buffer[:i])
+			if len(line) > 0 && line[len(line)-1] == '\r' {
+				line = line[:len(line)-1] // remove \r for \r\n
+			}
+			b.formatter.addLine(line) // ignore errors in Write
+			b.buffer = b.buffer[i+1:]
+		} else {
+			break
+		}
+	}
+	return len(p), nil
 }
 
-func (r *Reader) parseLine(line string) {
+func (b *Buffer) Lines() []string {
+	b.flush()
+
+	return b.formatter.lines()
+}
+
+func (b *Buffer) Read(p []byte) (n int, err error) {
+	if b.readBuffer == nil {
+		b.flush()
+		lines := b.formatter.lines()
+		if len(lines) == 0 {
+			return 0, io.EOF
+		}
+		b.readBuffer = []byte(strings.Join(lines, "\n") + "\n")
+		b.readPos = 0
+		// clear the formatter after generating read buffer so next write/read cycle is fresh
+		b.formatter.reset()
+	}
+
+	if b.readPos >= len(b.readBuffer) {
+
+		// read is complete, can reset for next cycle
+		b.readBuffer = nil
+		b.readPos = 0
+		return 0, io.EOF
+	}
+
+	n = copy(p, b.readBuffer[b.readPos:])
+	b.readPos += n
+
+	if b.readPos >= len(b.readBuffer) {
+		// read is complete, can reset for next cycle
+		b.readBuffer = nil
+		b.readPos = 0
+		return n, io.EOF
+	}
+	return n, nil
+}
+
+func (b *Buffer) flush() {
+	if len(b.buffer) > 0 {
+		line := string(b.buffer)
+		b.formatter.addLine(line)
+		b.buffer = b.buffer[:0]
+	}
+}
+
+type formatter struct {
+	widths    []int
+	table     [][]string
+	separator string
+}
+
+func (f *formatter) setSeperator(sep string) {
+	f.separator = sep
+}
+
+func (f *formatter) addLine(line string) error {
 	cols := strings.Split(line, "\t")
 	for i := range cols {
 		cols[i] = strings.TrimSpace(cols[i])
 	}
-	if r.widths == nil {
+	if f.widths == nil {
 		for _, p := range cols {
-			r.widths = append(r.widths, strWidth(p))
+			f.widths = append(f.widths, strWidth(p))
 		}
 	}
-	if len(cols) != len(r.widths) {
-		r.errs = append(r.errs, &RowError{Line: r.line, Want: len(r.widths), Got: len(cols)})
-		return
+	if len(cols) != len(f.widths) {
+		return &ColumnCountError{Want: len(f.widths), Got: len(cols)}
 	}
-	for i := range r.widths {
-		r.widths[i] = max(r.widths[i], strWidth(cols[i]))
+	for i := range f.widths {
+		f.widths[i] = max(f.widths[i], strWidth(cols[i]))
 	}
-	r.table = append(r.table, cols)
+	f.table = append(f.table, cols)
+	return nil
 }
 
-func (r *Reader) Flush() {
+func (f *formatter) lines() []string {
+	result := make([]string, len(f.table))
+	for i, row := range f.table {
+		result[i] = f.formatRow(row)
+	}
+	return result
+}
+
+func (f *formatter) formatRow(row []string) string {
 	var sep string = " "
-	if r.Separator != "" {
-		sep = " " + r.Separator + " "
+	if f.separator != "" {
+		sep = " " + f.separator + " "
 	}
 
-	for _, row := range r.table {
-		var rbuf []byte
-		for i, col := range row {
-			if i != 0 {
-				rbuf = append(rbuf, []byte(sep)...)
-			}
-			rbuf = append(rbuf, []byte(col)...)
-			rbuf = append(rbuf, strings.Repeat(" ", r.widths[i]-strWidth(col))...)
+	var rbuf []byte
+	for i, col := range row {
+		if i != 0 {
+			rbuf = append(rbuf, []byte(sep)...)
 		}
-		fmt.Fprintln(r.out, string(rbuf))
+		rbuf = append(rbuf, []byte(col)...)
+		if i < len(f.widths) {
+			rbuf = append(rbuf, strings.Repeat(" ", f.widths[i]-strWidth(col))...)
+		}
 	}
-
-	r.table = nil
+	return string(rbuf)
 }
 
-func (r *Reader) Reset() error {
-	r.widths = nil
-
-	err := errors.Join(r.errs...)
-	r.errs = nil
-	return err
+func (f *formatter) reset() {
+	f.widths = nil
+	f.table = nil
 }
 
 type RowError struct {
@@ -151,10 +163,36 @@ func (re *RowError) Error() string {
 	return fmt.Sprintf("line %d: want %d cols got %d", re.Line, re.Want, re.Got)
 }
 
+type ColumnCountError struct {
+	Want, Got int
+}
+
+func (ce *ColumnCountError) Error() string {
+	return fmt.Sprintf("want %d cols got %d", ce.Want, ce.Got)
+}
+
 var ansiEscExpr = regexp.MustCompile("[\u001B\u009B][[\\]()#;?]*(?:(?:(?:[a-zA-Z\\d]*(?:;[a-zA-Z\\d]*)*)?\u0007)|(?:(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-PRZcf-ntqry=><~]))")
 
 func strWidth(s string) int {
 	s = ansiEscExpr.ReplaceAllString(s, "")
 	w := uniseg.StringWidth(s)
 	return w
+}
+
+func FormatLines(lines []string) {
+	if len(lines) == 0 {
+		return
+	}
+
+	var f formatter
+	for _, line := range lines {
+		f.addLine(line)
+	}
+
+	formatted := f.lines()
+	for i := range formatted {
+		if i < len(lines) {
+			lines[i] = formatted[i]
+		}
+	}
 }

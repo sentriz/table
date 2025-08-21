@@ -1,8 +1,7 @@
 package main
 
 import (
-	"bufio"
-	"fmt"
+	"io"
 	"os"
 	"strconv"
 
@@ -27,35 +26,12 @@ func main() {
 		}
 	}
 
-	out := bufio.NewWriter(os.Stdout)
-	defer out.Flush()
+	// TODO: use
+	_ = flushInterval
 
-	t := table.NewReader(out, os.Stdin)
-	t.Separator = separator
+	var b table.Buffer
+	b.SetSeparator(separator)
 
-	defer func() {
-		if err := t.Reset(); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-	}()
-
-	if flushInterval == 0 {
-		for t.Scan() {
-		}
-		t.Flush()
-		return
-	}
-
-L:
-	for {
-		for i := 0; i < flushInterval; i++ {
-			if !t.Scan() {
-				break L
-			}
-		}
-		t.Flush()
-		out.Flush()
-	}
-	t.Flush()
+	io.CopyN(&b, os.Stdin, 1000)
+	io.CopyN(os.Stdout, &b, 1000)
 }
