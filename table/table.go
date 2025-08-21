@@ -11,156 +11,135 @@ import (
 	"github.com/rivo/uniseg"
 )
 
-type Buffer struct {
-	formatter  formatter
-	buffer     []byte
-	readBuffer []byte
-	readPos    int
+type Writer struct {
+	out            io.Writer
+	buf            []byte
+	pre, sep, suff string
+	widths         []int
+	rows           [][]string
+	err            error // first error (e.g., ColumnCountError) recorded during Write
 }
 
-func (b *Buffer) SetSeparator(sep string) {
-	b.formatter.setSeperator(sep)
-}
-
-func (b *Buffer) Write(p []byte) (int, error) {
-	b.readBuffer = nil
-	b.readPos = 0
-
-	if b.buffer == nil {
-		b.buffer = make([]byte, 0, 1024)
+// New constructs a new Writer that will emit formatted rows to out on Flush/Close.
+func New(out io.Writer) *Writer {
+	return &Writer{
+		out: out,
+		buf: make([]byte, 0, 1024),
 	}
+}
 
-	b.buffer = append(b.buffer, p...)
+// SetFormat controls formatting for the output including prefix, column separator, and suffix.
+func (w *Writer) SetFormat(pre, sep, suff string) {
+	w.pre = pre
+	w.sep = sep
+	w.suff = suff
+}
+
+// Write ingests bytes, splitting on '\n' (handles optional trailing '\r').
+// Parsed lines are buffered; call Flush or Close to write formatted output to out.
+// Column-count errors are recorded and surfaced on Flush/Close; subsequent lines are still processed.
+func (w *Writer) Write(p []byte) (int, error) {
+	w.buf = append(w.buf, p...)
+
 	for {
-		if i := bytes.IndexByte(b.buffer, '\n'); i >= 0 {
-			line := string(b.buffer[:i])
-			if len(line) > 0 && line[len(line)-1] == '\r' {
-				line = line[:len(line)-1] // remove \r for \r\n
-			}
-			b.formatter.addLine(line) // ignore errors in Write
-			b.buffer = b.buffer[i+1:]
-		} else {
+		i := bytes.IndexByte(w.buf, '\n')
+		if i < 0 {
 			break
 		}
+		line := string(w.buf[:i])
+		if len(line) > 0 && line[len(line)-1] == '\r' {
+			line = line[:len(line)-1] // handle \r\n
+		}
+		if err := w.addLine(line); err != nil && w.err == nil {
+			w.err = err
+		}
+		w.buf = w.buf[i+1:]
 	}
+
 	return len(p), nil
 }
 
-func (b *Buffer) Lines() []string {
-	b.flush()
+// Flush formats all buffered rows and writes them to out, then resets rows/widths.
+// Returns the first error encountered during Write/addLine or any write error.
+func (w *Writer) Flush() error {
+	if len(w.rows) == 0 {
+		// nothing to emit; still report any earlier error
+		err := w.err
+		w.reset()
+		return err
+	}
 
-	return b.formatter.lines()
-}
+	var sep = " "
+	if w.sep != "" {
+		sep = " " + w.sep + " "
+	}
 
-func (b *Buffer) Read(p []byte) (n int, err error) {
-	if b.readBuffer == nil {
-		b.flush()
-		lines := b.formatter.lines()
-		if len(lines) == 0 {
-			return 0, io.EOF
+	for _, row := range w.rows {
+		line := formatRow(row, w.widths, w.pre, sep, w.suff)
+		if _, err := io.WriteString(w.out, line+"\n"); err != nil {
+			// preserve original write-time error if it existed; otherwise, set this write error
+			if w.err == nil {
+				w.err = err
+			}
+			break
 		}
-		b.readBuffer = []byte(strings.Join(lines, "\n") + "\n")
-		b.readPos = 0
-		// clear the formatter after generating read buffer so next write/read cycle is fresh
-		b.formatter.reset()
 	}
 
-	if b.readPos >= len(b.readBuffer) {
-
-		// read is complete, can reset for next cycle
-		b.readBuffer = nil
-		b.readPos = 0
-		return 0, io.EOF
-	}
-
-	n = copy(p, b.readBuffer[b.readPos:])
-	b.readPos += n
-
-	if b.readPos >= len(b.readBuffer) {
-		// read is complete, can reset for next cycle
-		b.readBuffer = nil
-		b.readPos = 0
-		return n, io.EOF
-	}
-	return n, nil
+	err := w.err
+	w.reset()
+	return err
 }
 
-func (b *Buffer) flush() {
-	if len(b.buffer) > 0 {
-		line := string(b.buffer)
-		b.formatter.addLine(line)
-		b.buffer = b.buffer[:0]
-	}
+func (w *Writer) reset() {
+	w.rows = nil
+	w.widths = nil
+	w.err = nil
 }
 
-type formatter struct {
-	widths    []int
-	table     [][]string
-	separator string
-}
-
-func (f *formatter) setSeperator(sep string) {
-	f.separator = sep
-}
-
-func (f *formatter) addLine(line string) error {
+// addLine parses, trims, validates column count, updates widths, and buffers the row.
+func (w *Writer) addLine(line string) error {
 	cols := strings.Split(line, "\t")
 	for i := range cols {
 		cols[i] = strings.TrimSpace(cols[i])
 	}
-	if f.widths == nil {
-		for _, p := range cols {
-			f.widths = append(f.widths, strWidth(p))
+
+	if w.widths == nil {
+		// initialize widths to number of columns in the first row
+		w.widths = make([]int, len(cols))
+	}
+
+	if len(cols) != len(w.widths) {
+		return &ColumnCountError{Want: len(w.widths), Got: len(cols)}
+	}
+
+	for i, c := range cols {
+		if cw := strWidth(c); cw > w.widths[i] {
+			w.widths[i] = cw
 		}
 	}
-	if len(cols) != len(f.widths) {
-		return &ColumnCountError{Want: len(f.widths), Got: len(cols)}
-	}
-	for i := range f.widths {
-		f.widths[i] = max(f.widths[i], strWidth(cols[i]))
-	}
-	f.table = append(f.table, cols)
+	w.rows = append(w.rows, cols)
 	return nil
 }
 
-func (f *formatter) lines() []string {
-	result := make([]string, len(f.table))
-	for i, row := range f.table {
-		result[i] = f.formatRow(row)
-	}
-	return result
-}
+func formatRow(row []string, widths []int, pre, sep, suff string) string {
+	var sb strings.Builder
+	sb.WriteString(pre)
 
-func (f *formatter) formatRow(row []string) string {
-	var sep string = " "
-	if f.separator != "" {
-		sep = " " + f.separator + " "
-	}
-
-	var rbuf []byte
 	for i, col := range row {
 		if i != 0 {
-			rbuf = append(rbuf, []byte(sep)...)
+			sb.WriteString(sep)
 		}
-		rbuf = append(rbuf, []byte(col)...)
-		if i < len(f.widths) {
-			rbuf = append(rbuf, strings.Repeat(" ", f.widths[i]-strWidth(col))...)
+		sb.WriteString(col)
+		if i < len(widths) {
+			pad := widths[i] - strWidth(col)
+			if pad > 0 {
+				sb.WriteString(strings.Repeat(" ", pad))
+			}
 		}
 	}
-	return string(rbuf)
-}
 
-func (f *formatter) reset() {
-	f.widths = nil
-	f.table = nil
-}
-
-type RowError struct {
-	Line, Want, Got int
-}
-
-func (re *RowError) Error() string {
-	return fmt.Sprintf("line %d: want %d cols got %d", re.Line, re.Want, re.Got)
+	sb.WriteString(suff)
+	return sb.String()
 }
 
 type ColumnCountError struct {
@@ -175,21 +154,58 @@ var ansiEscExpr = regexp.MustCompile("[\u001B\u009B][[\\]()#;?]*(?:(?:(?:[a-zA-Z
 
 func strWidth(s string) int {
 	s = ansiEscExpr.ReplaceAllString(s, "")
-	w := uniseg.StringWidth(s)
-	return w
+	return uniseg.StringWidth(s)
 }
 
+// FormatLines formats the provided lines in-place.
+// Lines with a mismatched column count (relative to the first line) are ignored,
+// matching the behavior of the original code (they remain unchanged).
 func FormatLines(lines []string) {
 	if len(lines) == 0 {
 		return
 	}
 
-	var f formatter
+	var widths []int
+	rows := make([][]string, 0, len(lines))
+
 	for _, line := range lines {
-		f.addLine(line)
+		cols := strings.Split(line, "\t")
+		for i := range cols {
+			cols[i] = strings.TrimSpace(cols[i])
+		}
+
+		if widths == nil {
+			widths = make([]int, len(cols))
+			for i, c := range cols {
+				widths[i] = strWidth(c)
+			}
+			rows = append(rows, cols)
+			continue
+		}
+
+		if len(cols) != len(widths) {
+			// ignore mismatched rows (keep original line content)
+			continue
+		}
+
+		for i, c := range cols {
+			w := strWidth(c)
+			if w > widths[i] {
+				widths[i] = w
+			}
+		}
+		rows = append(rows, cols)
 	}
 
-	formatted := f.lines()
+	if len(rows) == 0 {
+		return
+	}
+
+	formatted := make([]string, len(rows))
+	for i, r := range rows {
+		formatted[i] = formatRow(r, widths, "", " ", "")
+	}
+
 	for i := range formatted {
 		if i < len(lines) {
 			lines[i] = formatted[i]

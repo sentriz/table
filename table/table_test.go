@@ -1,6 +1,8 @@
 package table_test
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"testing"
@@ -9,34 +11,35 @@ import (
 )
 
 func TestTable(t *testing.T) {
-	var tbl table.Buffer
-	fmt.Fprintf(&tbl, "%s\t%s\t%s\n", "", "b", "c!")
-	fmt.Fprintf(&tbl, "%s\t%s\t%s\n", "aaaa", "b", "c")
-	tEq(t, tRead(t, &tbl), "     b c!\naaaa b c \n")
+	var buff bytes.Buffer
+	tbl := table.New(&buff)
+	fmt.Fprintf(tbl, "%s\t%s\t%s\n", "", "b", "c!")
+	fmt.Fprintf(tbl, "%s\t%s\t%s\n", "aaaa", "b", "c")
+	tNoErr(t, tbl.Flush())
+	tEq(t, tRead(t, &buff), "     b c!\naaaa b c \n")
 
-	fmt.Fprintf(&tbl, "%s\t%s\t%s\n", "a", "bbbbbbbbbbb", "c")
-	fmt.Fprintf(&tbl, "%s\t%s\t%s\n", "", "", "c")
-	tEq(t, tRead(t, &tbl), "a bbbbbbbbbbb c\n              c\n")
+	fmt.Fprintf(tbl, "%s\t%s\t%s\n", "a", "bbbbbbbbbbb", "c")
+	fmt.Fprintf(tbl, "%s\t%s\t%s\n", "", "", "c")
+	tNoErr(t, tbl.Flush())
+	tEq(t, tRead(t, &buff), "a bbbbbbbbbbb c\n              c\n")
 }
 
 func TestTableError(t *testing.T) {
-	// var in, out bytes.Buffer
-	// tbl := table.Formatter(&out, &in)
-	//
-	// fmt.Fprintf(&in, "%s\t%s\t%s\n", "", "b", "c!")
-	// fmt.Fprintf(&in, "%s\t%s\n", "1", "2")
-	// fmt.Fprintf(&in, "%s\t%s\n", "3", "4")
-	// for tbl.Scan() {
-	// }
-	//
-	// var re *table.RowError
-	// tbl.Flush()
-	// if !errors.As(tbl.Reset(), &re) {
-	// 	t.Fatal("didn't get row error")
-	// }
-	// tEq(t, re.Line, 2)
-	// tEq(t, re.Want, 3)
-	// tEq(t, re.Got, 2)
+	var buff bytes.Buffer
+	tbl := table.New(&buff)
+
+	fmt.Fprintf(&buff, "%s\t%s\t%s\n", "", "b", "c!")
+	fmt.Fprintf(&buff, "%s\t%s\n", "1", "2")
+	fmt.Fprintf(&buff, "%s\t%s\n", "3", "4")
+	tNoErr(t, tbl.Flush())
+
+	var re *table.ColumnCountError
+	if !errors.As(tbl.Flush(), &re) {
+		t.Fatal("didn't get row error")
+	}
+	tEq(t, re.Line, 2)
+	tEq(t, re.Want, 3)
+	tEq(t, re.Got, 2)
 
 }
 

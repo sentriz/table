@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"io"
 	"os"
 	"strconv"
@@ -8,30 +9,58 @@ import (
 	"go.senan.xyz/table/table"
 )
 
-// $ stream | table [ sep ]
-// $ stream | table [ sep [ flush interval ] ]
+// $ stream | table [ <separator> [ <flush interval> [ <prefix> [ <suffix> ] ] ] ]
 
 func main() {
-	var separator string
-	var flushInterval int
+	var separator, flushIntervalStr, prefix, suffix string
+	parseArgs(os.Args[1:], &separator, &flushIntervalStr, &prefix, &suffix)
 
-	args := os.Args[1:]
-	if len(args) > 0 {
-		separator = args[0]
-		args = args[1:]
+	flushInterval, _ := strconv.Atoi(flushIntervalStr)
+
+	w := table.New(os.Stdout)
+	w.SetFormat(prefix, separator, suffix)
+
+	// No flush interval, just copy
+	if flushInterval == 0 {
+		if _, err := io.Copy(w, os.Stdin); err != nil {
+			panic(err)
+		}
+		if err := w.Flush(); err != nil {
+			panic(err)
+		}
+		return
 	}
-	if len(args) > 0 {
-		if i, _ := strconv.Atoi(args[0]); i > 0 {
-			flushInterval = i
+
+	sc := bufio.NewScanner(os.Stdin)
+L:
+	for {
+		for i := 0; i < flushInterval; i++ {
+			if !sc.Scan() {
+				break L
+			}
+			if _, err := w.Write(sc.Bytes()); err != nil {
+				panic(err)
+			}
+			if _, err := w.Write([]byte{'\n'}); err != nil {
+				panic(err)
+			}
+		}
+
+		if err := w.Flush(); err != nil {
+			panic(err)
 		}
 	}
 
-	// TODO: use
-	_ = flushInterval
+	if err := sc.Err(); err != nil {
+		panic(err)
+	}
+	if err := w.Flush(); err != nil {
+		panic(err)
+	}
+}
 
-	var b table.Buffer
-	b.SetSeparator(separator)
-
-	io.CopyN(&b, os.Stdin, 1000)
-	io.CopyN(os.Stdout, &b, 1000)
+func parseArgs(args []string, ptrs ...*string) {
+	for i := 0; i < min(len(args), len(ptrs)); i++ {
+		*ptrs[i] = args[i]
+	}
 }
