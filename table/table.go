@@ -1,7 +1,9 @@
-// Package table provides a Writer for formatting tab-separated data into aligned columns.
+// Package table provides a Writer that formats tab-separated data into aligned columns.
+// Column widths account for ANSI escape sequences and grapheme cluster widths (via uniseg).
 package table
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"io"
@@ -17,7 +19,8 @@ type Writer struct {
 	pre, sep, suff string
 	widths         []int
 	rows           [][]string
-	err            error // first error (e.g., ColumnCountError) recorded during Write
+	err            error // first error (e.g., RowError) recorded during Write
+	lineNum        int
 }
 
 // New constructs a new Writer that will emit formatted rows to out on Flush/Close.
@@ -40,7 +43,6 @@ func (w *Writer) SetFormat(pre, sep, suff string) {
 // Column-count errors are recorded and surfaced on Flush/Close; subsequent lines are still processed.
 func (w *Writer) Write(p []byte) (int, error) {
 	w.buf = append(w.buf, p...)
-
 	for {
 		i := bytes.IndexByte(w.buf, '\n')
 		if i < 0 {
@@ -50,12 +52,12 @@ func (w *Writer) Write(p []byte) (int, error) {
 		if len(line) > 0 && line[len(line)-1] == '\r' {
 			line = line[:len(line)-1] // handle \r\n
 		}
-		if err := w.addLine(line); err != nil && w.err == nil {
+		w.lineNum++
+		if err := w.addLine(line, w.lineNum); err != nil && w.err == nil {
 			w.err = err
 		}
 		w.buf = w.buf[i+1:]
 	}
-
 	return len(p), nil
 }
 
@@ -69,13 +71,8 @@ func (w *Writer) Flush() error {
 		return err
 	}
 
-	var sep = " "
-	if w.sep != "" {
-		sep = " " + w.sep + " "
-	}
-
 	for _, row := range w.rows {
-		line := formatRow(row, w.widths, w.pre, sep, w.suff)
+		line := formatRow(row, w.widths, w.pre, w.sep, w.suff)
 		if _, err := io.WriteString(w.out, line+"\n"); err != nil {
 			// preserve original write-time error if it existed; otherwise, set this write error
 			if w.err == nil {
@@ -90,28 +87,18 @@ func (w *Writer) Flush() error {
 	return err
 }
 
-func (w *Writer) reset() {
-	w.rows = nil
-	w.widths = nil
-	w.err = nil
-}
-
 // addLine parses, trims, validates column count, updates widths, and buffers the row.
-func (w *Writer) addLine(line string) error {
+func (w *Writer) addLine(line string, lineNum int) error {
 	cols := strings.Split(line, "\t")
 	for i := range cols {
 		cols[i] = strings.TrimSpace(cols[i])
 	}
-
 	if w.widths == nil {
-		// initialize widths to number of columns in the first row
 		w.widths = make([]int, len(cols))
 	}
-
 	if len(cols) != len(w.widths) {
-		return &ColumnCountError{Want: len(w.widths), Got: len(cols)}
+		return &RowError{Want: len(w.widths), Got: len(cols), Line: lineNum}
 	}
-
 	for i, c := range cols {
 		if cw := strWidth(c); cw > w.widths[i] {
 			w.widths[i] = cw
@@ -121,40 +108,38 @@ func (w *Writer) addLine(line string) error {
 	return nil
 }
 
+func (w *Writer) reset() {
+	w.rows = nil
+	w.widths = nil
+	w.err = nil
+	w.lineNum = 0
+}
+
 func formatRow(row []string, widths []int, pre, sep, suff string) string {
 	var sb strings.Builder
 	sb.WriteString(pre)
-
 	for i, col := range row {
 		if i != 0 {
 			sb.WriteString(sep)
 		}
 		sb.WriteString(col)
 		if i < len(widths) {
-			pad := widths[i] - strWidth(col)
-			if pad > 0 {
+			if pad := widths[i] - strWidth(col); pad > 0 {
 				sb.WriteString(strings.Repeat(" ", pad))
 			}
 		}
 	}
-
 	sb.WriteString(suff)
 	return sb.String()
 }
 
-type ColumnCountError struct {
+type RowError struct {
 	Want, Got int
+	Line      int
 }
 
-func (ce *ColumnCountError) Error() string {
-	return fmt.Sprintf("want %d cols got %d", ce.Want, ce.Got)
-}
-
-var ansiEscExpr = regexp.MustCompile("[\u001B\u009B][[\\]()#;?]*(?:(?:(?:[a-zA-Z\\d]*(?:;[a-zA-Z\\d]*)*)?\u0007)|(?:(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-PRZcf-ntqry=><~]))")
-
-func strWidth(s string) int {
-	s = ansiEscExpr.ReplaceAllString(s, "")
-	return uniseg.StringWidth(s)
+func (re *RowError) Error() string {
+	return fmt.Sprintf("line %d, want %d cols got %d", re.Line, re.Want, re.Got)
 }
 
 // FormatLines formats the provided lines in-place.
@@ -167,19 +152,21 @@ func FormatLines(lines []string) {
 
 	var widths []int
 	rows := make([][]string, 0, len(lines))
+	rowIndices := make([]int, 0, len(lines)) // track which line index each row corresponds to
 
-	for _, line := range lines {
+	for i, line := range lines {
 		cols := strings.Split(line, "\t")
-		for i := range cols {
-			cols[i] = strings.TrimSpace(cols[i])
+		for j := range cols {
+			cols[j] = strings.TrimSpace(cols[j])
 		}
 
 		if widths == nil {
 			widths = make([]int, len(cols))
-			for i, c := range cols {
-				widths[i] = strWidth(c)
+			for j, c := range cols {
+				widths[j] = strWidth(c)
 			}
 			rows = append(rows, cols)
+			rowIndices = append(rowIndices, i)
 			continue
 		}
 
@@ -188,27 +175,89 @@ func FormatLines(lines []string) {
 			continue
 		}
 
-		for i, c := range cols {
-			w := strWidth(c)
-			if w > widths[i] {
-				widths[i] = w
+		for j, c := range cols {
+			if w := strWidth(c); w > widths[j] {
+				widths[j] = w
 			}
 		}
 		rows = append(rows, cols)
+		rowIndices = append(rowIndices, i)
 	}
 
 	if len(rows) == 0 {
 		return
 	}
 
-	formatted := make([]string, len(rows))
-	for i, r := range rows {
-		formatted[i] = formatRow(r, widths, "", " ", "")
-	}
-
-	for i := range formatted {
-		if i < len(lines) {
-			lines[i] = formatted[i]
+	// Format and apply only the matched rows
+	for i, row := range rows {
+		if i < len(rowIndices) {
+			lines[rowIndices[i]] = formatRow(row, widths, "", " ", "")
 		}
 	}
+}
+
+// FormatReader reads tab-separated data and returns formatted lines in one pass
+func FormatReader(r io.Reader) ([]string, error) {
+	scanner := bufio.NewScanner(r)
+
+	var widths []int
+	var result []string
+	var rows [][]string
+	var rowIndices []int // track which result index each formatted row should go to
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		cols := strings.Split(line, "\t")
+
+		for j := range cols {
+			cols[j] = strings.TrimSpace(cols[j])
+		}
+
+		if widths == nil {
+			widths = make([]int, len(cols))
+			for j, c := range cols {
+				widths[j] = strWidth(c)
+			}
+			rows = append(rows, cols)
+			rowIndices = append(rowIndices, len(result))
+			result = append(result, "") // placeholder
+			continue
+		}
+
+		if len(cols) != len(widths) {
+			// ignore mismatched rows (keep original line content)
+			result = append(result, line)
+			continue
+		}
+
+		for j, c := range cols {
+			if w := strWidth(c); w > widths[j] {
+				widths[j] = w
+			}
+		}
+		rows = append(rows, cols)
+		rowIndices = append(rowIndices, len(result))
+		result = append(result, "") // placeholder
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	// format and apply only the matched rows
+	for i, row := range rows {
+		if i < len(rowIndices) {
+			result[rowIndices[i]] = formatRow(row, widths, "", " ", "")
+		}
+	}
+
+	return result, nil
+}
+
+var ansiEscExpr = regexp.MustCompile("[\u001B\u009B][[\\]()#;?]*(?:(?:(?:[a-zA-Z\\d]*(?:;[a-zA-Z\\d]*)*)?\u0007)|(?:(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-PRZcf-ntqry=><~]))")
+
+func strWidth(str string) int {
+	str = ansiEscExpr.ReplaceAllString(str, "")
+	width := uniseg.StringWidth(str)
+	return width
 }

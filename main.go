@@ -12,15 +12,26 @@ import (
 // $ stream | table [ <separator> [ <flush interval> [ <prefix> [ <suffix> ] ] ] ]
 
 func main() {
-	var separator, flushIntervalStr, prefix, suffix string
-	parseArgs(os.Args[1:], &separator, &flushIntervalStr, &prefix, &suffix)
+	var prefix, separator, suffix = "", " ", ""
+	var flushInterval int
 
-	flushInterval, _ := strconv.Atoi(flushIntervalStr)
+	if n := 1; len(os.Args) > n {
+		separator = os.Args[n]
+	}
+	if n := 2; len(os.Args) > n {
+		flushInterval, _ = strconv.Atoi(os.Args[n])
+	}
+	if n := 3; len(os.Args) > n {
+		prefix = os.Args[n]
+	}
+	if n := 4; len(os.Args) > n {
+		suffix = os.Args[n]
+	}
 
 	w := table.New(os.Stdout)
 	w.SetFormat(prefix, separator, suffix)
 
-	// No flush interval, just copy
+	// no flush interval, just copy
 	if flushInterval == 0 {
 		if _, err := io.Copy(w, os.Stdin); err != nil {
 			panic(err)
@@ -56,11 +67,5 @@ L:
 	}
 	if err := w.Flush(); err != nil {
 		panic(err)
-	}
-}
-
-func parseArgs(args []string, ptrs ...*string) {
-	for i := 0; i < min(len(args), len(ptrs)); i++ {
-		*ptrs[i] = args[i]
 	}
 }
