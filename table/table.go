@@ -23,7 +23,7 @@ type Writer struct {
 	lineNum        int
 }
 
-// New constructs a new Writer that will emit formatted rows to out on Flush/Close.
+// New constructs a new Writer that will emit formatted rows to out on Flush.
 func New(out io.Writer) *Writer {
 	return &Writer{
 		out: out,
@@ -39,8 +39,8 @@ func (w *Writer) SetFormat(pre, sep, suff string) {
 }
 
 // Write ingests bytes, splitting on '\n' (handles optional trailing '\r').
-// Parsed lines are buffered; call Flush or Close to write formatted output to out.
-// Column-count errors are recorded and surfaced on Flush/Close; subsequent lines are still processed.
+// Parsed lines are buffered; call Flush to write formatted output to out.
+// Column-count errors are recorded and surfaced on Flush; subsequent lines are still processed.
 func (w *Writer) Write(p []byte) (int, error) {
 	w.buf = append(w.buf, p...)
 	for {
