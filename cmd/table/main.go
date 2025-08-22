@@ -6,7 +6,7 @@ import (
 	"os"
 	"strconv"
 
-	"go.senan.xyz/table/table"
+	"go.senan.xyz/table"
 )
 
 // $ stream | table [ <separator> [ <flush interval> [ <prefix> [ <suffix> ] ] ] ]

@@ -7,7 +7,7 @@ import (
 	"io"
 	"testing"
 
-	"go.senan.xyz/table/table"
+	"go.senan.xyz/table"
 )
 
 func TestTable(t *testing.T) {
