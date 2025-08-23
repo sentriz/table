@@ -123,13 +123,18 @@ func formatRow(row []string, widths []int, pre, sep, suff string) string {
 			sb.WriteString(sep)
 		}
 		sb.WriteString(col)
-		if i < len(widths) {
+		if i < len(widths)-1 {
 			if pad := widths[i] - strWidth(col); pad > 0 {
 				sb.WriteString(strings.Repeat(" ", pad))
 			}
 		}
 	}
-	sb.WriteString(suff)
+	if suff != "" {
+		if pad := widths[len(widths)-1] - strWidth(row[len(row)-1]); pad > 0 {
+			sb.WriteString(strings.Repeat(" ", pad))
+		}
+		sb.WriteString(suff)
+	}
 	return sb.String()
 }
 

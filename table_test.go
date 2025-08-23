@@ -17,12 +17,23 @@ func TestTable(t *testing.T) {
 	fmt.Fprintf(tbl, "%s\t%s\t%s\n", "", "b", "c!")
 	fmt.Fprintf(tbl, "%s\t%s\t%s\n", "aaaa", "b", "c")
 	tNoErr(t, tbl.Flush())
-	tEq(t, tRead(t, &buff), "     b c!\naaaa b c \n")
+	tEq(t, tRead(t, &buff), "     b c!\naaaa b c\n")
 
 	fmt.Fprintf(tbl, "%s\t%s\t%s\n", "a", "bbbbbbbbbbb", "c")
 	fmt.Fprintf(tbl, "%s\t%s\t%s\n", "", "", "c")
 	tNoErr(t, tbl.Flush())
 	tEq(t, tRead(t, &buff), "a bbbbbbbbbbb c\n              c\n")
+
+	fmt.Fprintf(tbl, "%s\t%s\t%s\n", "a", "b", "c")
+	fmt.Fprintf(tbl, "%s\t%s\t%s\n", "aa", "bb", "cc")
+	tNoErr(t, tbl.Flush())
+	tEq(t, tRead(t, &buff), "a  b  c\naa bb cc\n") // no trailing space on first line
+
+	tbl.SetFormat("", " ", "|")
+	fmt.Fprintf(tbl, "%s\t%s\t%s\n", "a", "b", "c ")
+	fmt.Fprintf(tbl, "%s\t%s\t%s\n", "aa", "bb", "cc")
+	tNoErr(t, tbl.Flush())
+	tEq(t, tRead(t, &buff), "a  b  c |\naa bb cc|\n")
 }
 
 func TestTableError(t *testing.T) {
@@ -89,10 +100,14 @@ func tNoErr(t *testing.T, err error) {
 	}
 }
 
-func tEq[T comparable](t *testing.T, a, b T) {
+func tEq[T comparable](t *testing.T, got, want T) {
 	t.Helper()
-	if a != b {
-		t.Fatalf("%v != %v", a, b)
+	if want != got {
+		fmt.Println("want:")
+		fmt.Println(want)
+		fmt.Println("got:")
+		fmt.Println(got)
+		t.Fatal()
 	}
 }
 
